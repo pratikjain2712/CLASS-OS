@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# ClassOS — One-command server setup for Ubuntu 22.04 EC2
+# ClassOS — One-command server setup for Ubuntu 22.04 / 24.04 EC2
 # Run as: bash server_setup.sh
 # ─────────────────────────────────────────────────────────────────────────────
 set -e
@@ -51,9 +51,12 @@ info "Updating system packages..."
 sudo apt-get update -qq
 sudo apt-get upgrade -y -qq
 sudo apt-get install -y -qq \
-  git curl wget unzip awscli \
+  git curl wget unzip \
   nginx certbot python3-certbot-nginx \
-  build-essential
+  build-essential python3-pip
+
+# awscli v2 works on both 22.04 and 24.04 via pip
+pip3 install --quiet awscli 2>/dev/null || true
 
 # ── 2. Docker ──────────────────────────────────────────────────────────────
 if ! command -v docker &>/dev/null; then
