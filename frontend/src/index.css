@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: 'DM Sans', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Nunito', system-ui, sans-serif;
+  }
+
+  body {
+    @apply bg-slate-50 text-slate-800;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-amber-500 hover:bg-amber-600 text-white font-heading font-700 px-5 py-2.5 rounded-lg transition-colors;
+  }
+
+  .btn-secondary {
+    @apply bg-navy-50 hover:bg-navy-100 text-navy font-medium px-5 py-2.5 rounded-lg border border-navy-200 transition-colors;
+  }
+
+  .card {
+    @apply bg-white rounded-xl border border-slate-200 shadow-sm;
+  }
+
+  .input {
+    @apply w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent;
+  }
+
+  .select {
+    @apply w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent;
+  }
+
+  .badge-easy {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-50 text-green-600;
+  }
+
+  .badge-medium {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-50 text-amber-600;
+  }
+
+  .badge-hard {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-50 text-red-600;
+  }
+
+  .badge-warned {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-50 text-orange-600 border border-orange-200;
+  }
+}
