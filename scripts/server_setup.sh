@@ -160,16 +160,21 @@ sudo nginx -t && sudo systemctl reload nginx
 
 # ── 9. SSL certificate ─────────────────────────────────────────────────────
 info "Obtaining SSL certificate for $DOMAIN..."
-sudo certbot certonly --nginx \
+if sudo certbot certonly --nginx \
   --non-interactive \
   --agree-tos \
   --email "$SSL_EMAIL" \
-  --domains "$DOMAIN" || {
+  --domains "$DOMAIN"; then
+  # SSL succeeded — use the full HTTPS config
+  sudo cp "$APP_DIR/nginx/classos.conf" /etc/nginx/sites-available/classos
+  sudo sed -i "s/__DOMAIN__/${DOMAIN}/g" /etc/nginx/sites-available/classos
+  sudo ln -sf /etc/nginx/sites-available/classos /etc/nginx/sites-enabled/classos
+else
   warn "SSL skipped (bare IP or certbot error) — running HTTP only."
-}
-
-# Always switch to real nginx config (with or without SSL)
-sudo ln -sf /etc/nginx/sites-available/classos /etc/nginx/sites-enabled/classos
+  # Fall back to plain HTTP config
+  sudo cp "$APP_DIR/nginx/classos_http.conf" /etc/nginx/sites-available/classos
+  sudo ln -sf /etc/nginx/sites-available/classos /etc/nginx/sites-enabled/classos
+fi
 sudo rm -f /etc/nginx/sites-available/classos_temp
 sudo nginx -t && sudo systemctl reload nginx
 
