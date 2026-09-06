@@ -1,6 +1,7 @@
 from uuid import UUID
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -211,6 +212,36 @@ async def swap_question(
 
     paper = await _load_paper(db, paper_id)
     return _build_paper_response(paper, [])
+
+
+@router.post("/{paper_id}/export-pdf")
+async def export_paper_pdf(
+    paper_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.models.institute import Institute
+    from app.services.pdf_export import build_paper_html, generate_pdf
+
+    paper = await _load_paper(db, paper_id)
+    if not paper:
+        raise HTTPException(404, "Paper not found")
+    _check_access(paper, current_user)
+
+    inst = await db.get(Institute, paper.institute_id)
+    institute_name = inst.name if inst else "ClassOS"
+
+    html = build_paper_html(paper, paper.paper_questions, institute_name)
+    pdf_bytes = generate_pdf(html)
+
+    safe_title = "".join(c if c.isalnum() or c in " _-" else "_" for c in paper.title)
+    filename = f"{safe_title}.pdf"
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/{paper_id}/finalize", response_model=PaperOut)

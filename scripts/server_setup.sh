@@ -124,6 +124,10 @@ fi
 cd "$APP_DIR/frontend"
 npm install --silent
 npm run build
+# Ensure nginx (running as www-data) can read the built assets
+chmod o+x "$HOME"
+chmod -R o+r "$APP_DIR/frontend/dist"
+find "$APP_DIR/frontend/dist" -type d -exec chmod o+x {} \;
 cd "$APP_DIR"
 
 # ── 6. Start Docker services ───────────────────────────────────────────────

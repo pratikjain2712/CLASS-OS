@@ -8,6 +8,7 @@ import MyPapers from '@/pages/MyPapers'
 import PaperReview from '@/pages/PaperReview'
 import QuestionBank from '@/pages/QuestionBank'
 import InstituteAdmin from '@/pages/InstituteAdmin'
+import AdminQuestions from '@/pages/AdminQuestions'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { user } = useAuth()
@@ -33,6 +34,7 @@ export default function App() {
         <Route path="papers/:paperId/review" element={<PaperReview />} />
         <Route path="bank" element={<QuestionBank />} />
         <Route path="admin" element={<InstituteAdmin />} />
+        <Route path="admin/questions" element={<AdminQuestions />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

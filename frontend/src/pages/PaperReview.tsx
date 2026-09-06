@@ -1,8 +1,8 @@
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import { AlertTriangle, RefreshCw, CheckCircle, ArrowLeft } from 'lucide-react'
-import type { PaperWithQuestions } from '@/types'
+import { AlertTriangle, RefreshCw, CheckCircle, ArrowLeft, FileDown, X } from 'lucide-react'
+import type { PaperWithQuestions, Question } from '@/types'
 import { clsx } from 'clsx'
 import { useState } from 'react'
 
@@ -11,6 +11,7 @@ export default function PaperReview() {
   const navigate = useNavigate()
   const qc = useQueryClient()
   const [swappingPqId, setSwappingPqId] = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
 
   const { data: paper, isLoading } = useQuery<PaperWithQuestions>({
     queryKey: ['paper', paperId],
@@ -22,12 +23,42 @@ export default function PaperReview() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['paper', paperId] }),
   })
 
+  const swapMutation = useMutation({
+    mutationFn: ({ pqId, newQId }: { pqId: string; newQId: string }) =>
+      api.put(`/papers/${paperId}/questions/${pqId}/swap`, {
+        new_question_id: newQId,
+        swap_reason: 'manual',
+      }).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['paper', paperId] })
+      setSwappingPqId(null)
+    },
+  })
+
+  const handleExport = async () => {
+    if (!paperId) return
+    setExporting(true)
+    try {
+      const resp = await api.post(`/papers/${paperId}/export-pdf`, {}, { responseType: 'blob' })
+      const url = URL.createObjectURL(resp.data)
+      const a = document.createElement('a')
+      a.href = url
+      const disp = resp.headers['content-disposition'] || ''
+      const match = disp.match(/filename="(.+)"/)
+      a.download = match?.[1] ?? 'paper.pdf'
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      alert('PDF export failed. Please try again.')
+    } finally {
+      setExporting(false)
+    }
+  }
+
   if (isLoading) return <div className="p-8 text-slate-400 text-sm">Loading paper…</div>
   if (!paper) return <div className="p-8 text-red-400 text-sm">Paper not found.</div>
 
-  // Group by section
   const sections = [...new Set(paper.paper_questions.map((pq) => pq.section_label))]
-
   const warningCount = paper.paper_questions.filter((pq) => pq.question.already_asked).length
   const shortfallCount = paper.shortfall?.length ?? 0
 
@@ -45,6 +76,14 @@ export default function PaperReview() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            className="btn-outline flex items-center gap-1.5 text-sm"
+            onClick={handleExport}
+            disabled={exporting}
+          >
+            <FileDown size={14} />
+            {exporting ? 'Exporting…' : 'Export PDF'}
+          </button>
           {paper.status !== 'final' && (
             <button
               className="btn-primary flex items-center gap-1.5"
@@ -91,9 +130,7 @@ export default function PaperReview() {
         return (
           <div key={section} className="card mb-4">
             <div className="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between">
-              <h3 className="font-heading font-700 text-navy text-sm">
-                Section {section}
-              </h3>
+              <h3 className="font-heading font-700 text-navy text-sm">Section {section}</h3>
               <span className="text-xs text-slate-400">{pqs.length} questions · {sectionMarks} marks</span>
             </div>
             <div className="divide-y divide-slate-100">
@@ -140,13 +177,21 @@ export default function PaperReview() {
                         </div>
                       )}
 
-                      {swappingPqId !== pq.id && (
+                      {/* Swap toggle */}
+                      {swappingPqId !== pq.id ? (
                         <button
                           className="mt-2 text-xs text-amber hover:underline flex items-center gap-1"
-                          onClick={() => setSwappingPqId(swappingPqId === pq.id ? null : pq.id)}
+                          onClick={() => setSwappingPqId(pq.id)}
                         >
                           <RefreshCw size={11} /> Swap question
                         </button>
+                      ) : (
+                        <SwapPicker
+                          pq={pq}
+                          onSwap={(newQId) => swapMutation.mutate({ pqId: pq.id, newQId })}
+                          onCancel={() => setSwappingPqId(null)}
+                          swapping={swapMutation.isPending}
+                        />
                       )}
                     </div>
                   </div>
@@ -156,6 +201,63 @@ export default function PaperReview() {
           </div>
         )
       })}
+    </div>
+  )
+}
+
+function SwapPicker({
+  pq,
+  onSwap,
+  onCancel,
+  swapping,
+}: {
+  pq: { id: string; question: Question; marks: number }
+  onSwap: (newQId: string) => void
+  onCancel: () => void
+  swapping: boolean
+}) {
+  const { data: alternatives = [] } = useQuery<Question[]>({
+    queryKey: ['swap-candidates', pq.id, pq.question.question_type, pq.marks],
+    queryFn: () =>
+      api.get('/questions', {
+        params: {
+          question_type: pq.question.question_type,
+          marks: pq.marks,
+        },
+      }).then((r) => r.data.filter((q: Question) => q.id !== pq.question.id).slice(0, 8)),
+  })
+
+  return (
+    <div className="mt-3 border border-amber-200 rounded-lg bg-amber-50 p-3">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs font-medium text-amber-800">
+          Select a replacement ({pq.question.question_type} · {pq.marks}M)
+        </p>
+        <button onClick={onCancel} className="text-slate-400 hover:text-slate-600">
+          <X size={13} />
+        </button>
+      </div>
+      {alternatives.length === 0 ? (
+        <p className="text-xs text-slate-500 py-1">No other questions available with the same type and marks.</p>
+      ) : (
+        <div className="space-y-1.5 max-h-52 overflow-y-auto">
+          {alternatives.map((q) => (
+            <button
+              key={q.id}
+              disabled={swapping}
+              onClick={() => onSwap(q.id)}
+              className="w-full text-left p-2 rounded border border-transparent hover:border-amber-300 hover:bg-white transition-colors text-xs text-slate-700 leading-snug"
+            >
+              {q.question_text.length > 120 ? q.question_text.slice(0, 120) + '…' : q.question_text}
+              <span className={clsx(
+                'ml-2 font-medium',
+                q.difficulty === 'Easy' ? 'text-green-600' :
+                q.difficulty === 'Medium' ? 'text-amber-600' : 'text-red-500'
+              )}>({q.difficulty})</span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
