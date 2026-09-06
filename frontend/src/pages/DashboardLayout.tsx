@@ -1,7 +1,7 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import {
-  LayoutDashboard, FileText, BookOpen, Library, Users, LogOut, Sparkles
+  LayoutDashboard, FileText, Library, Users, LogOut, Sparkles
 } from 'lucide-react'
 import { clsx } from 'clsx'
 

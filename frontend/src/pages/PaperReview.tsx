@@ -1,8 +1,8 @@
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import { AlertTriangle, RefreshCw, CheckCircle, Download, ArrowLeft } from 'lucide-react'
-import type { PaperWithQuestions, Question } from '@/types'
+import { AlertTriangle, RefreshCw, CheckCircle, ArrowLeft } from 'lucide-react'
+import type { PaperWithQuestions } from '@/types'
 import { clsx } from 'clsx'
 import { useState } from 'react'
 
@@ -97,7 +97,7 @@ export default function PaperReview() {
               <span className="text-xs text-slate-400">{pqs.length} questions · {sectionMarks} marks</span>
             </div>
             <div className="divide-y divide-slate-100">
-              {pqs.map((pq, idx) => (
+              {pqs.map((pq) => (
                 <div key={pq.id} className={clsx('p-5', pq.question.already_asked && 'bg-orange-50/40')}>
                   <div className="flex items-start gap-3">
                     <div className="w-6 h-6 rounded-full bg-slate-100 flex items-center justify-center text-xs font-medium text-slate-500 shrink-0 mt-0.5">

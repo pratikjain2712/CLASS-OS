@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
-import { FileText, ChevronRight, Download } from 'lucide-react'
+import { FileText, ChevronRight } from 'lucide-react'
 import type { Paper } from '@/types'
 
 export default function MyPapers() {
