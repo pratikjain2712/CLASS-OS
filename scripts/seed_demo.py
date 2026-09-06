@@ -30,6 +30,12 @@ async def seed():
         from app.models.questions import Question
         from app.models.credits import InstituteCredits
 
+        # Skip if already seeded
+        existing = await db.execute(select(User).where(User.email == "admin@classos.io"))
+        if existing.scalar_one_or_none():
+            print("Demo data already seeded — skipping.")
+            return
+
         # Institute
         inst = Institute(name="Arihant Educare", subscription_plan="pro")
         db.add(inst)
