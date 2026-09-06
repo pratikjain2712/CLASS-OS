@@ -41,6 +41,9 @@ export default {
         heading: ['Nunito', 'sans-serif'],
         body: ['DM Sans', 'sans-serif'],
       },
+      fontWeight: {
+        '700': '700',
+      },
     },
   },
   plugins: [],
