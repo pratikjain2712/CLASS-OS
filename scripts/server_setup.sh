@@ -136,7 +136,7 @@ sleep 15
 # ── 7. Seed demo data ─────────────────────────────────────────────────────
 info "Seeding demo data..."
 docker compose -f docker-compose.prod.yml exec -T api \
-  python /app/../scripts/seed_demo.py || warn "Seed may have already run — continuing."
+  python /app/scripts/seed_demo.py || warn "Seed may have already run — continuing."
 
 # ── 8. Nginx ───────────────────────────────────────────────────────────────
 info "Configuring Nginx..."
@@ -164,9 +164,11 @@ sudo certbot certonly --nginx \
   --non-interactive \
   --agree-tos \
   --email "$SSL_EMAIL" \
-  --domains "$DOMAIN"
+  --domains "$DOMAIN" || {
+  warn "SSL skipped (bare IP or certbot error) — running HTTP only."
+}
 
-# Switch to full config with SSL
+# Always switch to real nginx config (with or without SSL)
 sudo ln -sf /etc/nginx/sites-available/classos /etc/nginx/sites-enabled/classos
 sudo rm -f /etc/nginx/sites-available/classos_temp
 sudo nginx -t && sudo systemctl reload nginx
