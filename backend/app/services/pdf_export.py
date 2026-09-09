@@ -37,12 +37,11 @@ def _html_escape(text: str) -> str:
 
 
 def _fix_math(text: str) -> str:
-    """Convert caret-notation and common MathML-strip artifacts to Unicode."""
+    """Convert caret-notation superscripts (x^2 → x²) to Unicode."""
     def sup_replace(m: re.Match) -> str:
         return m.group(1) + m.group(2).translate(_SUP_MAP)
 
     text = re.sub(r'([A-Za-z0-9\)\]])\s*\^\s*\{?([0-9]+)\}?', sup_replace, text)
-    text = re.sub(r'([\)\]])\s+([0-9])\s*(?=[+\-×÷=\s,\.])', sup_replace, text)
     return text
 
 
@@ -95,6 +94,26 @@ def _format_answer_steps(raw: str) -> str:
                 html_parts.append(f"<p class='ak-step'>{escaped}</p>")
 
     return "".join(html_parts) if html_parts else f"<p class='ak-step'>{_html_escape(_fix_math(raw))}</p>"
+
+
+def _format_question_text(text: str) -> str:
+    """
+    Format question text for display. Splits on roman sub-part markers so
+    Case Based questions with (i)/(ii)/(iii) sub-parts get proper line breaks.
+    Returns raw HTML (not yet wrapped in a container).
+    """
+    sub_parts = _ROMAN_SPLIT.split(text.strip())
+    if len(sub_parts) <= 1:
+        return _html_escape(text)
+    html_parts: list[str] = []
+    for part in sub_parts:
+        part = part.strip()
+        if not part:
+            continue
+        is_sub = bool(re.match(r'^\((?:i{1,3}|iv|vi{0,3}|viii)\)', part, re.IGNORECASE))
+        css = "q-sub" if is_sub else "q-intro"
+        html_parts.append(f"<p class='{css}'>{_html_escape(part)}</p>")
+    return "".join(html_parts) if html_parts else _html_escape(text)
 
 
 def _extract_mcq_options(question_text: str) -> tuple[str, list[dict] | None]:
@@ -222,15 +241,19 @@ def build_paper_html(
 
             if q.question_type == "MCQ" and not q.options:
                 stem, parsed_opts = _extract_mcq_options(raw_text)
+                stem_html = _html_escape(stem)
             else:
                 stem, parsed_opts = raw_text, None
+                stem_html = _format_question_text(raw_text)
 
             q_body += f"""
-            <div class='question'>
-                <span class='q-num'>Q{q_global}.</span>
-                <span class='q-text'>{_html_escape(stem)}</span>
-                <span class='q-marks'>[{pq.marks}M]</span>
-            </div>"""
+            <table class='q-row'>
+              <tr>
+                <td class='q-num'>Q{q_global}.</td>
+                <td class='q-text'>{stem_html}</td>
+                <td class='q-marks'>[{pq.marks}M]</td>
+              </tr>
+            </table>"""
 
             if q.question_type == "MCQ":
                 opts = parsed_opts or (q.options if q.options else None)
@@ -332,20 +355,26 @@ def build_paper_html(
     padding-bottom: 2pt;
   }}
   .sec-meta {{ font-weight: normal; font-size: 9.5pt; color: #555; }}
-  .question {{
-    display: flex; gap: 0;
-    margin: 6pt 0 2pt 0;
-    align-items: flex-start;
-  }}
+  .q-row {{ width: 100%; border-collapse: collapse; margin: 6pt 0 2pt 0; }}
   .q-num {{
     font-weight: bold;
     white-space: nowrap;
-    min-width: 34pt;
-    padding-right: 4pt;
-    flex-shrink: 0;
+    width: 34pt;
+    padding-right: 6pt;
+    vertical-align: top;
   }}
-  .q-text {{ flex: 1; }}
-  .q-marks {{ color: #666; font-size: 9.5pt; white-space: nowrap; margin-left: 6pt; flex-shrink: 0; }}
+  .q-text {{ vertical-align: top; }}
+  .q-marks {{
+    white-space: nowrap;
+    width: 26pt;
+    padding-left: 4pt;
+    color: #666;
+    font-size: 9.5pt;
+    vertical-align: top;
+    text-align: right;
+  }}
+  .q-intro {{ margin: 0 0 3pt 0; }}
+  .q-sub {{ margin: 3pt 0 0 12pt; }}
   /* Regular MCQ options: 2-column grid */
   .options {{
     display: grid; grid-template-columns: 1fr 1fr;
