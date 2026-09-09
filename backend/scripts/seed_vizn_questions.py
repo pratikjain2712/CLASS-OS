@@ -290,7 +290,7 @@ async def seed():
 
         dup_r = await db.execute(
             select(Question).where(
-                Question.board == "SSC",
+                Question.board == "Maharashtra SSC",
                 Question.class_ == 8,
             ).limit(1)
         )
@@ -313,7 +313,7 @@ async def seed():
                 title="SSC Mathematics Class 8",
                 subject="Mathematics",
                 class_=8,
-                board="SSC",
+                board="Maharashtra SSC",
                 edition="2025-26",
             )
             db.add(book)
@@ -345,7 +345,7 @@ async def seed():
                 chapter_id=chapter.id,
                 subject="Mathematics",
                 class_=8,
-                board="SSC",
+                board="Maharashtra SSC",
                 question_type=q["q_type"],
                 marks=q["marks"],
                 difficulty=q["difficulty"],
