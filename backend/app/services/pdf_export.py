@@ -20,6 +20,12 @@ SECTION_DISPLAY = {
     "E": "Case Based",
 }
 
+_FIGURE_KEYWORDS = re.compile(
+    r'\b(given figure|figure shown|figure below|in the figure|as shown|from the figure|'
+    r'the figure|refer to figure|see figure)\b',
+    re.IGNORECASE,
+)
+
 
 def _html_escape(text: str) -> str:
     return (
@@ -32,13 +38,10 @@ def _html_escape(text: str) -> str:
 
 def _fix_math(text: str) -> str:
     """Convert caret-notation and common MathML-strip artifacts to Unicode."""
-    # x^2 → x², x^{10} → x¹⁰
     def sup_replace(m: re.Match) -> str:
         return m.group(1) + m.group(2).translate(_SUP_MAP)
 
     text = re.sub(r'([A-Za-z0-9\)\]])\s*\^\s*\{?([0-9]+)\}?', sup_replace, text)
-    # Also handle plain "x 2 " after bracket/letter when followed by space+operator or end
-    # (conservative — only when preceded by ) or ] to avoid false positives)
     text = re.sub(r'([\)\]])\s+([0-9])\s*(?=[+\-×÷=\s,\.])', sup_replace, text)
     return text
 
@@ -55,17 +58,52 @@ def _strip_answer_prefix(text: str) -> str:
 
 def _extract_mcq_options(question_text: str) -> tuple[str, list[dict] | None]:
     """
-    If the question text embeds MCQ options as (A) ... (B) ... (C) ... (D) ...,
-    split them out and return (stem, options_list). Otherwise return (text, None).
+    Split embedded MCQ options from question text.
+    Handles two formats:
+      - Regular MCQ: stem ... (A) opt_a (B) opt_b (C) opt_c (D) opt_d
+      - Assertion-Reason: Assertion (A): [text] Reason (R): [text]
+            (A) Both A and R are true ... (B) ... (C) ... (D) ...
     """
-    idx = question_text.find("(A)")
+    text = question_text
+
+    # Assertion-Reason: look for the standard "(A) Both" start of options
+    is_assertion = bool(re.search(r'\bAssertion\b', text, re.IGNORECASE))
+    if is_assertion:
+        # Find where the actual A/B/C/D answer choices begin
+        match = re.search(r'\(A\)\s*Both\b', text, re.IGNORECASE)
+        if not match:
+            # Try finding any "(A)" that comes after Reason
+            reason_pos = text.lower().find("reason")
+            if reason_pos != -1:
+                match = re.search(r'\(A\)', text[reason_pos:])
+                if match:
+                    match = type('obj', (object,), {
+                        'start': lambda self: reason_pos + match.start()
+                    })()
+        if match:
+            split_pos = match.start() if callable(match.start) else match.start()
+            stem = text[:split_pos].strip()
+            tail = text[split_pos:]
+            parts = re.split(r'\(([A-D])\)', tail)
+            options = []
+            i = 1
+            while i + 1 < len(parts):
+                key = parts[i].strip()
+                val = parts[i + 1].strip()
+                if key in ("A", "B", "C", "D"):
+                    options.append({"key": key, "text": val})
+                i += 2
+            if len(options) >= 3:
+                return stem, options
+        return text, None
+
+    # Regular MCQ: split at first (A) that isn't preceded by "Assertion"
+    idx = text.find("(A)")
     if idx == -1:
-        return question_text, None
-    stem = question_text[:idx].strip()
-    tail = question_text[idx:]
-    # Split on option markers: (A), (B), (C), (D)
+        return text, None
+    stem = text[:idx].strip()
+    tail = text[idx:]
     parts = re.split(r'\(([A-D])\)', tail)
-    # parts = ['', 'A', 'text_a', 'B', 'text_b', 'C', 'text_c', 'D', 'text_d', ...]
     options = []
     i = 1
     while i + 1 < len(parts):
@@ -75,16 +113,30 @@ def _extract_mcq_options(question_text: str) -> tuple[str, list[dict] | None]:
             options.append({"key": key, "text": val})
         i += 2
     if len(options) < 3:
-        return question_text, None
+        return text, None
     return stem, options
 
 
-def _option_rows(options: list[dict]) -> str:
+def _option_rows(options: list[dict], is_assertion: bool = False) -> str:
+    if is_assertion:
+        # Assertion-Reason options are long sentences — render as single column list
+        items = "".join(
+            f"<div class='ar-opt'>({o['key']})&nbsp;{_html_escape(_fix_math(str(o['text'])))}</div>"
+            for o in options
+        )
+        return f"<div class='ar-options'>{items}</div>"
     items = "".join(
         f"<span class='opt'>({o['key']})&nbsp;{_html_escape(_fix_math(str(o['text'])))}</span>"
         for o in options
     )
     return f"<div class='options'>{items}</div>"
+
+
+def _figure_note(text: str) -> str:
+    """Return a figure-missing notice if the question references a figure."""
+    if _FIGURE_KEYWORDS.search(text):
+        return "<div class='fig-note'>[Figure required — refer to the original textbook]</div>"
+    return ""
 
 
 def build_paper_html(
@@ -125,8 +177,8 @@ def build_paper_html(
         for pq in pqs:
             q = pq.question
             raw_text = _fix_math(q.question_text)
+            is_assertion = bool(re.search(r'\bAssertion\b', raw_text, re.IGNORECASE))
 
-            # Extract inline MCQ options when DB options field is empty
             if q.question_type == "MCQ" and not q.options:
                 stem, parsed_opts = _extract_mcq_options(raw_text)
             else:
@@ -142,24 +194,69 @@ def build_paper_html(
             if q.question_type == "MCQ":
                 opts = parsed_opts or (q.options if q.options else None)
                 if opts:
-                    q_body += _option_rows(opts)
+                    q_body += _option_rows(opts, is_assertion=is_assertion)
+                q_body += _figure_note(stem)
             else:
+                q_body += _figure_note(raw_text)
                 lines = max(2, pq.marks * 2)
                 q_body += f"<div class='answer-space' style='height:{lines * 18}px'></div>"
             q_global += 1
 
     # ── Answer key body ────────────────────────────────────────────────────────
-    ak_body = "<table class='ak-table'><thead><tr><th>Q#</th><th>Section</th><th>Type</th><th>Marks</th><th>Answer</th></tr></thead><tbody>"
+    # Part A: MCQ quick-reference grid (Section A only, compact)
+    mcq_rows = []
+    detail_blocks = []
     q_num = 1
+
     for sec_label, pqs in sections.items():
+        sec_name = SECTION_DISPLAY.get(sec_label, "")
         for pq in pqs:
             q = pq.question
-            sec_name = SECTION_DISPLAY.get(sec_label, q.question_type)
             raw_answer = _strip_answer_prefix(str(q.answer or ""))
             answer_text = _html_escape(_fix_math(raw_answer))
-            ak_body += f"<tr><td>{q_num}</td><td>{sec_label}</td><td>{sec_name}</td><td>{pq.marks}</td><td class='ak-ans'>{answer_text}</td></tr>"
+
+            if sec_label == "A":
+                # Extract just the answer letter if present
+                letter_match = re.match(r'^\(([A-D])\)', raw_answer.strip())
+                letter = f"({letter_match.group(1)})" if letter_match else raw_answer[:8].strip()
+                mcq_rows.append((q_num, letter))
+            else:
+                detail_blocks.append({
+                    "num": q_num,
+                    "marks": pq.marks,
+                    "sec": sec_label,
+                    "sec_name": sec_name,
+                    "answer": answer_text,
+                })
             q_num += 1
-    ak_body += "</tbody></table>"
+
+    # Build MCQ grid HTML (5 columns)
+    ak_mcq = ""
+    if mcq_rows:
+        ak_mcq = "<div class='ak-mcq-title'>Section A — Quick Reference</div>"
+        ak_mcq += "<table class='ak-mcq'><tbody>"
+        chunk = 5
+        for row_start in range(0, len(mcq_rows), chunk):
+            row_items = mcq_rows[row_start:row_start + chunk]
+            ak_mcq += "<tr>"
+            for qn, letter in row_items:
+                ak_mcq += f"<td><b>Q{qn}</b></td><td class='ak-letter'>{_html_escape(letter)}</td>"
+            # pad incomplete row
+            for _ in range(chunk - len(row_items)):
+                ak_mcq += "<td></td><td></td>"
+            ak_mcq += "</tr>"
+        ak_mcq += "</tbody></table>"
+
+    # Build detailed answer blocks HTML
+    ak_detail = ""
+    if detail_blocks:
+        ak_detail = "<div class='ak-detail-title'>Sections B – E — Detailed Answers</div>"
+        for blk in detail_blocks:
+            ak_detail += f"""
+            <div class='ak-block'>
+                <div class='ak-q-header'>Q{blk['num']}. &nbsp;[{blk['marks']}M — {blk['sec_name']}]</div>
+                <div class='ak-q-answer'>{blk['answer']}</div>
+            </div>"""
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -175,7 +272,7 @@ def build_paper_html(
     font-family: 'Times New Roman', Times, serif;
     font-size: 11pt;
     color: #111;
-    line-height: 1.5;
+    line-height: 1.55;
   }}
   .institute {{ text-align: center; font-size: 15pt; font-weight: bold; margin-bottom: 2pt; }}
   .paper-title {{ text-align: center; font-size: 13pt; font-weight: bold; margin-bottom: 2pt; }}
@@ -196,30 +293,69 @@ def build_paper_html(
   }}
   .sec-meta {{ font-weight: normal; font-size: 9.5pt; color: #555; }}
   .question {{
-    display: flex; gap: 6pt;
+    display: flex; gap: 0;
     margin: 6pt 0 2pt 0;
+    align-items: flex-start;
   }}
-  .q-num {{ font-weight: bold; white-space: nowrap; min-width: 22pt; }}
+  .q-num {{
+    font-weight: bold;
+    white-space: nowrap;
+    min-width: 34pt;
+    padding-right: 4pt;
+    flex-shrink: 0;
+  }}
   .q-text {{ flex: 1; }}
-  .q-marks {{ color: #666; font-size: 9.5pt; white-space: nowrap; align-self: flex-start; }}
+  .q-marks {{ color: #666; font-size: 9.5pt; white-space: nowrap; margin-left: 6pt; flex-shrink: 0; }}
+  /* Regular MCQ options: 2-column grid */
   .options {{
     display: grid; grid-template-columns: 1fr 1fr;
     gap: 2pt 10pt;
-    margin: 2pt 0 6pt 28pt;
+    margin: 2pt 0 6pt 38pt;
     font-size: 10.5pt;
   }}
   .opt {{ display: block; }}
+  /* Assertion-Reason options: single column */
+  .ar-options {{
+    margin: 4pt 0 6pt 38pt;
+    font-size: 10pt;
+  }}
+  .ar-opt {{ margin-bottom: 2pt; }}
+  .fig-note {{
+    font-size: 9pt; color: #888; font-style: italic;
+    margin: 2pt 0 4pt 38pt;
+  }}
   .answer-space {{
-    margin: 4pt 0 4pt 28pt;
+    margin: 4pt 0 4pt 38pt;
     border-bottom: 1px dotted #bbb;
   }}
-  /* Answer key */
+  /* ── Answer key ── */
   .page-break {{ page-break-before: always; }}
   .ak-title {{ font-size: 14pt; font-weight: bold; text-align: center; margin-bottom: 10pt; }}
-  .ak-table {{ width: 100%; border-collapse: collapse; font-size: 10pt; }}
-  .ak-table th, .ak-table td {{ border: 1px solid #ccc; padding: 4pt 6pt; }}
-  .ak-table th {{ background: #eee; font-weight: bold; text-align: left; }}
-  .ak-ans {{ max-width: 260pt; word-break: break-word; }}
+  /* MCQ quick grid */
+  .ak-mcq-title {{
+    font-size: 11pt; font-weight: bold;
+    margin: 10pt 0 4pt 0;
+    padding-bottom: 2pt;
+    border-bottom: 1px solid #aaa;
+  }}
+  .ak-mcq {{ width: 100%; border-collapse: collapse; font-size: 10pt; margin-bottom: 12pt; }}
+  .ak-mcq td {{ border: 1px solid #ddd; padding: 3pt 6pt; }}
+  .ak-letter {{ font-weight: bold; color: #1a1a8c; }}
+  /* Detailed answer blocks */
+  .ak-detail-title {{
+    font-size: 11pt; font-weight: bold;
+    margin: 8pt 0 4pt 0;
+    padding-bottom: 2pt;
+    border-bottom: 1px solid #aaa;
+  }}
+  .ak-block {{
+    margin-bottom: 8pt;
+    padding-bottom: 8pt;
+    border-bottom: 1px dotted #ccc;
+    page-break-inside: avoid;
+  }}
+  .ak-q-header {{ font-weight: bold; font-size: 10.5pt; margin-bottom: 2pt; }}
+  .ak-q-answer {{ padding-left: 12pt; font-size: 10pt; line-height: 1.5; }}
 </style>
 </head>
 <body>
@@ -233,8 +369,9 @@ def build_paper_html(
   <strong>General Instructions:</strong>
   (1) All questions are compulsory.
   (2) Section A contains MCQs of 1 mark each.
-  (3) Read all questions carefully before answering.
-  (4) Write answers clearly in the space provided.
+  (3) Assertion-Reason questions: select the correct option from (A)–(D).
+  (4) Read all questions carefully before answering.
+  (5) Write answers clearly in the space provided.
 </div>
 
 {q_body}
@@ -244,7 +381,9 @@ def build_paper_html(
 <div class='ak-title'>Answer Key — {_html_escape(paper.title)}</div>
 <div class='meta-row'>{_html_escape(header_sub)} &nbsp;|&nbsp; Total Marks: {paper.total_marks} &nbsp;|&nbsp; Date: {today}</div>
 <hr class='divider'>
-{ak_body}
+
+{ak_mcq}
+{ak_detail}
 
 </body>
 </html>"""
@@ -253,5 +392,5 @@ def build_paper_html(
 
 
 def generate_pdf(html: str) -> bytes:
-    from weasyprint import HTML, CSS
+    from weasyprint import HTML
     return HTML(string=html).write_pdf()
