@@ -354,6 +354,7 @@ async def seed():
                 question_text=q["question_text"],
                 options=q["options"],
                 answer=q["answer"],
+                is_approved=True,
             )
             db.add(q_obj)
             count += 1
