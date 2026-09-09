@@ -27,7 +27,7 @@ export default function PaperReview() {
     mutationFn: ({ pqId, newQId }: { pqId: string; newQId: string }) =>
       api.put(`/papers/${paperId}/questions/${pqId}/swap`, {
         new_question_id: newQId,
-        swap_reason: 'manual',
+        swap_reason: null,
       }).then((r) => r.data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['paper', paperId] })
