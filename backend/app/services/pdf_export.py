@@ -3,11 +3,22 @@ Generate a question paper PDF (question paper + answer key) using WeasyPrint.
 """
 
 from __future__ import annotations
+import re
 from datetime import date
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.models.papers import Paper, PaperQuestion
+
+_SUP_MAP = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
+
+SECTION_DISPLAY = {
+    "A": "Multiple Choice Questions",
+    "B": "Very Short Answer",
+    "C": "Short Answer",
+    "D": "Long Answer",
+    "E": "Case Based",
+}
 
 
 def _html_escape(text: str) -> str:
@@ -19,9 +30,58 @@ def _html_escape(text: str) -> str:
     )
 
 
+def _fix_math(text: str) -> str:
+    """Convert caret-notation and common MathML-strip artifacts to Unicode."""
+    # x^2 → x², x^{10} → x¹⁰
+    def sup_replace(m: re.Match) -> str:
+        return m.group(1) + m.group(2).translate(_SUP_MAP)
+
+    text = re.sub(r'([A-Za-z0-9\)\]])\s*\^\s*\{?([0-9]+)\}?', sup_replace, text)
+    # Also handle plain "x 2 " after bracket/letter when followed by space+operator or end
+    # (conservative — only when preceded by ) or ] to avoid false positives)
+    text = re.sub(r'([\)\]])\s+([0-9])\s*(?=[+\-×÷=\s,\.])', sup_replace, text)
+    return text
+
+
+def _strip_answer_prefix(text: str) -> str:
+    """Remove leading 'Answer:' or 'Ans:' label from DB answer text."""
+    stripped = text.strip()
+    for prefix in ("answer:", "ans:", "answer :", "ans :"):
+        if stripped.lower().startswith(prefix):
+            stripped = stripped[len(prefix):].lstrip()
+            break
+    return stripped
+
+
+def _extract_mcq_options(question_text: str) -> tuple[str, list[dict] | None]:
+    """
+    If the question text embeds MCQ options as (A) ... (B) ... (C) ... (D) ...,
+    split them out and return (stem, options_list). Otherwise return (text, None).
+    """
+    idx = question_text.find("(A)")
+    if idx == -1:
+        return question_text, None
+    stem = question_text[:idx].strip()
+    tail = question_text[idx:]
+    # Split on option markers: (A), (B), (C), (D)
+    parts = re.split(r'\(([A-D])\)', tail)
+    # parts = ['', 'A', 'text_a', 'B', 'text_b', 'C', 'text_c', 'D', 'text_d', ...]
+    options = []
+    i = 1
+    while i + 1 < len(parts):
+        key = parts[i].strip()
+        val = parts[i + 1].strip()
+        if key in ("A", "B", "C", "D"):
+            options.append({"key": key, "text": val})
+        i += 2
+    if len(options) < 3:
+        return question_text, None
+    return stem, options
+
+
 def _option_rows(options: list[dict]) -> str:
     items = "".join(
-        f"<span class='opt'>({o['key']})&nbsp;{_html_escape(str(o['text']))}</span>"
+        f"<span class='opt'>({o['key']})&nbsp;{_html_escape(_fix_math(str(o['text'])))}</span>"
         for o in options
     )
     return f"<div class='options'>{items}</div>"
@@ -47,29 +107,43 @@ def build_paper_html(
     q_global = 1
     for sec_label, pqs in sections.items():
         first_pq = pqs[0]
-        q_type = first_pq.question.question_type
         mpc = first_pq.marks
         count = len(pqs)
         sec_marks = mpc * count
 
+        sec_name = SECTION_DISPLAY.get(sec_label, first_pq.question.question_type)
+        q_word = "question" if count == 1 else "questions"
+        m_word = "mark" if mpc == 1 else "marks"
+        t_word = "mark" if sec_marks == 1 else "marks"
+
         q_body += f"""
         <div class='section-header'>
-            Section {sec_label} — {q_type} &nbsp;
-            <span class='sec-meta'>({count} questions × {mpc} marks = {sec_marks} marks)</span>
+            Section {sec_label} — {sec_name} &nbsp;
+            <span class='sec-meta'>({count} {q_word} × {mpc} {m_word} = {sec_marks} {t_word})</span>
         </div>"""
 
         for pq in pqs:
             q = pq.question
+            raw_text = _fix_math(q.question_text)
+
+            # Extract inline MCQ options when DB options field is empty
+            if q.question_type == "MCQ" and not q.options:
+                stem, parsed_opts = _extract_mcq_options(raw_text)
+            else:
+                stem, parsed_opts = raw_text, None
+
             q_body += f"""
             <div class='question'>
                 <span class='q-num'>Q{q_global}.</span>
-                <span class='q-text'>{_html_escape(q.question_text)}</span>
+                <span class='q-text'>{_html_escape(stem)}</span>
                 <span class='q-marks'>[{pq.marks}M]</span>
             </div>"""
-            if q.question_type == "MCQ" and q.options:
-                q_body += _option_rows(q.options)
-            # answer space lines for non-MCQ
-            if q.question_type not in ("MCQ",):
+
+            if q.question_type == "MCQ":
+                opts = parsed_opts or (q.options if q.options else None)
+                if opts:
+                    q_body += _option_rows(opts)
+            else:
                 lines = max(2, pq.marks * 2)
                 q_body += f"<div class='answer-space' style='height:{lines * 18}px'></div>"
             q_global += 1
@@ -80,8 +154,10 @@ def build_paper_html(
     for sec_label, pqs in sections.items():
         for pq in pqs:
             q = pq.question
-            answer_text = _html_escape(str(q.answer or ""))
-            ak_body += f"<tr><td>{q_num}</td><td>{sec_label}</td><td>{q.question_type}</td><td>{pq.marks}</td><td class='ak-ans'>{answer_text}</td></tr>"
+            sec_name = SECTION_DISPLAY.get(sec_label, q.question_type)
+            raw_answer = _strip_answer_prefix(str(q.answer or ""))
+            answer_text = _html_escape(_fix_math(raw_answer))
+            ak_body += f"<tr><td>{q_num}</td><td>{sec_label}</td><td>{sec_name}</td><td>{pq.marks}</td><td class='ak-ans'>{answer_text}</td></tr>"
             q_num += 1
     ak_body += "</tbody></table>"
 
@@ -129,7 +205,7 @@ def build_paper_html(
   .options {{
     display: grid; grid-template-columns: 1fr 1fr;
     gap: 2pt 10pt;
-    margin: 2pt 0 2pt 28pt;
+    margin: 2pt 0 6pt 28pt;
     font-size: 10.5pt;
   }}
   .opt {{ display: block; }}
