@@ -14,6 +14,9 @@ import asyncio
 import os
 import sys
 
+# Ensure the app package is importable regardless of working directory
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
 DATABASE_URL = os.environ.get(
     "DATABASE_URL", "postgresql+asyncpg://classos:classos@db:5432/classos"
 )
