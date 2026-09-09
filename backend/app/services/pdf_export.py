@@ -56,6 +56,47 @@ def _strip_answer_prefix(text: str) -> str:
     return stripped
 
 
+# Roman-numeral sub-part markers: (i), (ii), (iii), (iv), (v), (vi), (vii), (viii)
+_ROMAN_SPLIT = re.compile(r'(?=\((?:i{1,3}|iv|vi{0,3}|viii)\))', re.IGNORECASE)
+# Step-separator symbols: ∴ ⇒ ∵  (lookahead keeps symbol at start of new segment)
+_STEP_SPLIT = re.compile(r'(?=[∴⇒∵])')
+
+
+def _format_answer_steps(raw: str) -> str:
+    """
+    Convert a flat answer string into step-wise HTML.
+
+    Split points (in priority order):
+      1. Roman-numeral sub-parts: (i), (ii), (iii) ... rendered as bold sub-headers
+      2. Step-separator symbols: ∴ ⇒ ∵  rendered as indented step lines
+    Each segment is HTML-escaped and math-fixed individually.
+    """
+    # First split on sub-part markers
+    sub_parts = _ROMAN_SPLIT.split(raw.strip())
+    html_parts: list[str] = []
+
+    for part in sub_parts:
+        part = part.strip()
+        if not part:
+            continue
+        # Check if this segment starts with a roman sub-part marker
+        is_sub = bool(re.match(r'^\((?:i{1,3}|iv|vi{0,3}|viii)\)', part, re.IGNORECASE))
+
+        # Further split on step separators within this sub-part
+        steps = _STEP_SPLIT.split(part)
+        for idx, step in enumerate(steps):
+            step = step.strip()
+            if not step:
+                continue
+            escaped = _html_escape(_fix_math(step))
+            if idx == 0 and is_sub:
+                html_parts.append(f"<p class='ak-step ak-step-sub'>{escaped}</p>")
+            else:
+                html_parts.append(f"<p class='ak-step'>{escaped}</p>")
+
+    return "".join(html_parts) if html_parts else f"<p class='ak-step'>{_html_escape(_fix_math(raw))}</p>"
+
+
 def _extract_mcq_options(question_text: str) -> tuple[str, list[dict] | None]:
     """
     Split embedded MCQ options from question text.
@@ -213,7 +254,6 @@ def build_paper_html(
         for pq in pqs:
             q = pq.question
             raw_answer = _strip_answer_prefix(str(q.answer or ""))
-            answer_text = _html_escape(_fix_math(raw_answer))
 
             if sec_label == "A":
                 # Extract just the answer letter if present
@@ -226,7 +266,7 @@ def build_paper_html(
                     "marks": pq.marks,
                     "sec": sec_label,
                     "sec_name": sec_name,
-                    "answer": answer_text,
+                    "answer_html": _format_answer_steps(raw_answer),
                 })
             q_num += 1
 
@@ -255,7 +295,7 @@ def build_paper_html(
             ak_detail += f"""
             <div class='ak-block'>
                 <div class='ak-q-header'>Q{blk['num']}. &nbsp;[{blk['marks']}M — {blk['sec_name']}]</div>
-                <div class='ak-q-answer'>{blk['answer']}</div>
+                <div class='ak-q-answer'>{blk['answer_html']}</div>
             </div>"""
 
     html = f"""<!DOCTYPE html>
@@ -356,6 +396,8 @@ def build_paper_html(
   }}
   .ak-q-header {{ font-weight: bold; font-size: 10.5pt; margin-bottom: 2pt; }}
   .ak-q-answer {{ padding-left: 12pt; font-size: 10pt; line-height: 1.5; }}
+  .ak-step {{ margin: 0 0 3pt 0; }}
+  .ak-step-sub {{ font-weight: bold; margin-top: 5pt; }}
 </style>
 </head>
 <body>
