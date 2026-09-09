@@ -77,6 +77,25 @@ export default function GeneratePaper() {
 
   const selectedTemplate = templates.find((t) => t.id === form.template_id)
 
+  // ── Availability check (step 4) ───────────────────────────────────────────
+
+  const { data: avail, isFetching: availLoading } = useQuery<{
+    total_available: number
+    shortfall: boolean
+    sections: { section_label: string; needed: number; available_fresh: number; shortfall: boolean }[]
+  }>({
+    queryKey: ['availability', form.template_id, form.chapter_ids, form.difficulty],
+    queryFn: () => {
+      const p = new URLSearchParams()
+      p.append('template_id', form.template_id)
+      form.chapter_ids.forEach((id) => p.append('chapter_ids', id))
+      p.append('difficulty', form.difficulty)
+      return api.get(`/papers/availability?${p}`).then((r) => r.data)
+    },
+    enabled: step === 4 && !!form.template_id && form.chapter_ids.length > 0,
+    staleTime: 0,
+  })
+
   // ── Generation ────────────────────────────────────────────────────────────
 
   const generateMutation = useMutation({
@@ -335,6 +354,41 @@ export default function GeneratePaper() {
               <div className="text-slate-500 text-xs space-y-0.5">
                 <div>{form.chapter_ids.length} chapter(s) · {selectedTemplate.total_marks} marks · {form.difficulty} · {form.generation_mode === 'bank' ? 'Bank mode' : 'AI mode'}</div>
               </div>
+            </div>
+          )}
+
+          {/* Availability */}
+          {form.generation_mode === 'bank' && (
+            <div>
+              {availLoading && (
+                <div className="flex items-center gap-2 text-xs text-slate-400 py-1">
+                  <div className="w-3 h-3 border-2 border-slate-300 border-t-transparent rounded-full animate-spin" />
+                  Checking question bank…
+                </div>
+              )}
+              {!availLoading && avail && (
+                <div className={`rounded-lg p-3 text-sm border ${avail.shortfall ? 'bg-amber-50 border-amber-200' : 'bg-green-50 border-green-200'}`}>
+                  <div className="flex items-center gap-2">
+                    {avail.shortfall
+                      ? <AlertTriangle size={15} className="text-amber-500 shrink-0" />
+                      : <Check size={15} className="text-green-500 shrink-0" />
+                    }
+                    <span className={`font-medium text-xs ${avail.shortfall ? 'text-amber-700' : 'text-green-700'}`}>
+                      {avail.total_available} question{avail.total_available !== 1 ? 's' : ''} available in bank
+                      {avail.shortfall && ' — some sections may have fewer questions than needed'}
+                    </span>
+                  </div>
+                  {avail.shortfall && (
+                    <div className="mt-2 space-y-0.5 pl-5">
+                      {avail.sections.filter(s => s.shortfall).map(s => (
+                        <div key={s.section_label} className="text-xs text-amber-600">
+                          Section {s.section_label}: need {s.needed}, have {s.available_fresh}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
