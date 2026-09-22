@@ -20,17 +20,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.questions import Question, QuestionUsage
 from app.models.papers import Paper, PaperQuestion, PaperTemplate, PaperTemplateSection
+from app.services.data_loader import DataLoaderFactory, QuestionData
 
 
 async def check_availability(
     db: AsyncSession,
     template_id: UUID,
     chapter_ids: list[UUID],
-    difficulty: str,
-    batch_id: str,
-    institute_id: UUID,
+    chapter_numbers: list[int] = None,
+    difficulty: str = None,
+    batch_id: str = None,
+    institute_id: UUID = None,
 ) -> list[dict]:
     """Return availability counts per template section (used in Step 4 UI)."""
+    # JSON mode
+    if DataLoaderFactory.use_json():
+        return _check_availability_json(
+            template_id, chapter_numbers or [], difficulty, batch_id, institute_id, db
+        )
+
+    # Database mode (original)
     template = await db.get(PaperTemplate, template_id)
     if not template:
         raise ValueError("Template not found")
@@ -83,13 +92,19 @@ async def generate_bank_paper(
     paper: Paper,
     template: PaperTemplate,
     chapter_ids: list[UUID],
-    difficulty: str,
-    batch_id: str,
+    chapter_numbers: list[int] = None,
+    difficulty: str = None,
+    batch_id: str = None,
 ) -> tuple[list[PaperQuestion], list[dict]]:
     """
     Generate paper questions from the bank.
     Returns (paper_questions_to_insert, shortfall_report).
     """
+    # JSON mode
+    if DataLoaderFactory.use_json():
+        return _generate_bank_paper_json(paper, chapter_numbers or [], difficulty)
+
+    # Database mode (original)
     six_months_ago = datetime.utcnow() - timedelta(days=180)
 
     asked_stmt = select(QuestionUsage.question_id).where(
@@ -273,3 +288,123 @@ async def swap_question(
     db.add(paper)
     await db.flush()
     return old_pq
+
+
+# JSON mode helper functions
+def _check_availability_json(
+    template_id: UUID,
+    chapter_numbers: list[int],
+    difficulty: str,
+    batch_id: str,
+    institute_id: UUID,
+    db: AsyncSession,
+) -> list[dict]:
+    """JSON version of check_availability."""
+    loader = DataLoaderFactory.get_json_loader()
+    results = []
+
+    # Get template to iterate sections
+    # For JSON mode, we'll use placeholder template info
+    sections = [
+        {"label": "MCQ", "type": "MCQ", "marks": 1, "count": 20},
+        {"label": "SA", "type": "SA", "marks": 2, "count": 10},
+        {"label": "LA", "type": "LA", "marks": 5, "count": 5},
+    ]
+
+    for section in sections:
+        total_available = loader.count_by_criteria(
+            chapter_numbers=chapter_numbers or [],
+            question_type=section["type"],
+            marks=section["marks"],
+            difficulty=difficulty if difficulty != "Mixed" else None,
+        )
+
+        # For JSON mode, treat all as "fresh" since we don't track usage
+        fresh_available = total_available
+
+        results.append({
+            "section_label": section["label"],
+            "question_type": section["type"],
+            "marks_per_question": section["marks"],
+            "question_count": section["count"],
+            "available_total": total_available,
+            "available_fresh": fresh_available,
+            "shortfall": fresh_available < section["count"],
+        })
+
+    return results
+
+
+def _generate_bank_paper_json(
+    paper: Paper,
+    chapter_numbers: list[int],
+    difficulty: str,
+) -> tuple[list[PaperQuestion], list[dict]]:
+    """JSON version of generate_bank_paper."""
+    loader = DataLoaderFactory.get_json_loader()
+    paper_questions: list[PaperQuestion] = []
+    shortfall: list[dict] = []
+    global_order = 1
+
+    # For JSON mode, use simple sections
+    sections = [
+        {"label": "MCQ", "type": "MCQ", "marks": 1, "count": 20},
+        {"label": "SA", "type": "SA", "marks": 2, "count": 10},
+        {"label": "LA", "type": "LA", "marks": 5, "count": 5},
+    ]
+
+    for section in sections:
+        selected = _fetch_questions_json(
+            loader=loader,
+            chapter_numbers=chapter_numbers,
+            question_type=section["type"],
+            marks=section["marks"],
+            difficulty=difficulty,
+            count=section["count"],
+            exclude_ids=set(),
+        )
+
+        for q in selected:
+            pq = PaperQuestion(
+                paper_id=paper.id,
+                question_id=q.id,
+                section_label=section["label"],
+                question_order=global_order,
+                marks=section["marks"],
+                set_variant="A",
+            )
+            paper_questions.append(pq)
+            global_order += 1
+
+        if len(selected) < section["count"]:
+            shortfall.append({
+                "section_label": section["label"],
+                "question_type": section["type"],
+                "marks": section["marks"],
+                "requested": section["count"],
+                "available": len(selected),
+            })
+
+    return paper_questions, shortfall
+
+
+def _fetch_questions_json(
+    loader,
+    chapter_numbers: list[int],
+    question_type: str,
+    marks: int,
+    difficulty: str,
+    count: int,
+    exclude_ids: set[UUID],
+) -> list[QuestionData]:
+    """Fetch questions from JSON loader."""
+    questions = loader.get_by_chapter_type_marks(
+        chapter_numbers=chapter_numbers,
+        question_type=question_type,
+        marks=marks,
+        difficulty=difficulty,
+        exclude_ids=exclude_ids,
+    )
+
+    # Return requested count, or all available if less
+    return questions[:count]

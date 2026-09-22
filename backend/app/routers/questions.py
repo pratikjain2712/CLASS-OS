@@ -10,6 +10,7 @@ from app.models.institute import User
 from app.models.questions import Question, QuestionUsage
 from app.schemas.questions import QuestionOut, QuestionCreate
 from app.schemas.content import ChapterQuestionCount
+from app.services.data_loader import DataLoaderFactory
 
 router = APIRouter(prefix="/api/questions", tags=["questions"])
 
@@ -17,6 +18,7 @@ router = APIRouter(prefix="/api/questions", tags=["questions"])
 @router.get("", response_model=list[QuestionOut])
 async def list_questions(
     chapter_ids: list[UUID] = Query(default=[]),
+    chapter_numbers: list[int] = Query(default=[]),
     difficulty: str | None = None,
     question_type: str | None = None,
     marks: int | None = None,
@@ -25,6 +27,35 @@ async def list_questions(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # JSON mode
+    if DataLoaderFactory.use_json():
+        loader = DataLoaderFactory.get_json_loader()
+        # Use chapter_numbers if provided, otherwise fall back to empty list
+        chapters = chapter_numbers if chapter_numbers else []
+        filtered_qs = loader.filter(
+            chapter_numbers=chapters if chapters else None,
+            difficulty=difficulty,
+            question_type=question_type,
+            marks=marks,
+            limit=limit,
+        )
+        # Convert to QuestionOut format
+        out = []
+        for q in filtered_qs:
+            qo = QuestionOut(
+                id=q.id,
+                question_text=q.question_text,
+                answer=q.answer,
+                marks=q.marks,
+                question_type=q.question_type,
+                difficulty=q.difficulty,
+                chapter_id=None,
+                already_asked=False,
+            )
+            out.append(qo)
+        return out
+
+    # Database mode (original logic)
     stmt = select(Question).where(Question.is_approved == True)
     if chapter_ids:
         stmt = stmt.where(Question.chapter_id.in_(chapter_ids))

@@ -2,12 +2,19 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers import auth, publishers, templates, questions, papers, admin
+from app.services.data_loader import DataLoaderFactory
 
 app = FastAPI(
     title="ClassOS API",
     description="Question Paper Generator for Indian coaching institutes",
     version="1.0.0",
 )
+
+# Initialize data loader based on environment
+try:
+    DataLoaderFactory.initialize()
+except Exception as e:
+    print(f"Warning: Data loader initialization failed: {e}")
 
 app.add_middleware(
     CORSMiddleware,
