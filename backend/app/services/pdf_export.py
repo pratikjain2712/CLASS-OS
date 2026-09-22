@@ -4,6 +4,7 @@ Generate a question paper PDF (question paper + answer key) using WeasyPrint.
 
 from __future__ import annotations
 import re
+import subprocess
 from datetime import date
 from typing import TYPE_CHECKING
 
@@ -19,6 +20,31 @@ SECTION_DISPLAY = {
     "D": "Long Answer",
     "E": "Case Based",
 }
+
+_NODE_SCRIPT = "/app/mathjax-convert/convert.mjs"
+_MATHML_RE = re.compile(r'<math\b[^>]*>.*?</math>', re.DOTALL | re.IGNORECASE)
+
+
+def _mathml_to_svg(mml: str) -> str:
+    """Convert a <math>...</math> string to inline SVG via MathJax Node.js SSR."""
+    try:
+        result = subprocess.run(
+            ["node", _NODE_SCRIPT, mml],
+            capture_output=True, text=True, timeout=10
+        )
+        svg = result.stdout.strip()
+        if svg.startswith("<svg"):
+            return svg
+    except Exception:
+        pass
+    # Fallback: strip XML tags, return plain text
+    return re.sub(r'<[^>]+>', '', mml).strip()
+
+
+def _replace_mathml(text: str) -> str:
+    """Replace all <math>...</math> tags in text with inline SVG."""
+    return _MATHML_RE.sub(lambda m: _mathml_to_svg(m.group(0)), text)
+
 
 _FIGURE_KEYWORDS = re.compile(
     r'\b(given figure|figure shown|figure below|in the figure|as shown|from the figure|'
@@ -87,24 +113,39 @@ def _format_answer_steps(raw: str) -> str:
             step = step.strip()
             if not step:
                 continue
-            escaped = _html_escape(_fix_math(step))
+            rendered = _safe_escape(_replace_mathml(_fix_math(step)))
             if idx == 0 and is_sub:
-                html_parts.append(f"<p class='ak-step ak-step-sub'>{escaped}</p>")
+                html_parts.append(f"<p class='ak-step ak-step-sub'>{rendered}</p>")
             else:
-                html_parts.append(f"<p class='ak-step'>{escaped}</p>")
+                html_parts.append(f"<p class='ak-step'>{rendered}</p>")
 
-    return "".join(html_parts) if html_parts else f"<p class='ak-step'>{_html_escape(_fix_math(raw))}</p>"
+    return "".join(html_parts) if html_parts else f"<p class='ak-step'>{_safe_escape(_replace_mathml(_fix_math(raw)))}</p>"
+
+
+_SVG_RE = re.compile(r'(<svg\b.*?</svg>)', re.DOTALL | re.IGNORECASE)
+
+
+def _safe_escape(text: str) -> str:
+    """HTML-escape text but leave any inline SVG fragments untouched."""
+    parts = _SVG_RE.split(text)
+    out = []
+    for i, part in enumerate(parts):
+        if i % 2 == 1:  # odd indices are the captured SVG groups
+            out.append(part)
+        else:
+            out.append(_html_escape(part))
+    return "".join(out)
 
 
 def _format_question_text(text: str) -> str:
     """
     Format question text for display. Splits on roman sub-part markers so
     Case Based questions with (i)/(ii)/(iii) sub-parts get proper line breaks.
-    Returns raw HTML (not yet wrapped in a container).
+    SVG fragments (from MathML conversion) pass through unescaped.
     """
     sub_parts = _ROMAN_SPLIT.split(text.strip())
     if len(sub_parts) <= 1:
-        return _html_escape(text)
+        return _safe_escape(text)
     html_parts: list[str] = []
     for part in sub_parts:
         part = part.strip()
@@ -112,8 +153,8 @@ def _format_question_text(text: str) -> str:
             continue
         is_sub = bool(re.match(r'^\((?:i{1,3}|iv|vi{0,3}|viii)\)', part, re.IGNORECASE))
         css = "q-sub" if is_sub else "q-intro"
-        html_parts.append(f"<p class='{css}'>{_html_escape(part)}</p>")
-    return "".join(html_parts) if html_parts else _html_escape(text)
+        html_parts.append(f"<p class='{css}'>{_safe_escape(part)}</p>")
+    return "".join(html_parts) if html_parts else _safe_escape(text)
 
 
 def _extract_mcq_options(question_text: str) -> tuple[str, list[dict] | None]:
@@ -178,15 +219,18 @@ def _extract_mcq_options(question_text: str) -> tuple[str, list[dict] | None]:
 
 
 def _option_rows(options: list[dict], is_assertion: bool = False) -> str:
+    def _render_opt_text(t: str) -> str:
+        return _safe_escape(_replace_mathml(_fix_math(str(t))))
+
     if is_assertion:
         # Assertion-Reason options are long sentences — render as single column list
         items = "".join(
-            f"<div class='ar-opt'>({o['key']})&nbsp;{_html_escape(_fix_math(str(o['text'])))}</div>"
+            f"<div class='ar-opt'>({o['key']})&nbsp;{_render_opt_text(o['text'])}</div>"
             for o in options
         )
         return f"<div class='ar-options'>{items}</div>"
     items = "".join(
-        f"<span class='opt'>({o['key']})&nbsp;{_html_escape(_fix_math(str(o['text'])))}</span>"
+        f"<span class='opt'>({o['key']})&nbsp;{_render_opt_text(o['text'])}</span>"
         for o in options
     )
     return f"<div class='options'>{items}</div>"
@@ -236,12 +280,12 @@ def build_paper_html(
 
         for pq in pqs:
             q = pq.question
-            raw_text = _fix_math(q.question_text)
+            raw_text = _replace_mathml(_fix_math(q.question_text))
             is_assertion = bool(re.search(r'\bAssertion\b', raw_text, re.IGNORECASE))
 
             if q.question_type == "MCQ" and not q.options:
                 stem, parsed_opts = _extract_mcq_options(raw_text)
-                stem_html = _html_escape(stem)
+                stem_html = _safe_escape(stem)
             else:
                 stem, parsed_opts = raw_text, None
                 stem_html = _format_question_text(raw_text)
@@ -427,6 +471,8 @@ def build_paper_html(
   .ak-q-answer {{ padding-left: 12pt; font-size: 10pt; line-height: 1.5; }}
   .ak-step {{ margin: 0 0 3pt 0; }}
   .ak-step-sub {{ font-weight: bold; margin-top: 5pt; }}
+  /* MathJax SVG inline sizing */
+  svg[data-mml-node="math"] {{ display: inline; vertical-align: -0.2em; }}
 </style>
 </head>
 <body>
